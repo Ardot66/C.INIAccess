@@ -5,9 +5,7 @@
 #include <string.h>
 #include <pthread.h>
 
-const char 
-    *PairTypeMismatchMessage = "Type mismatch detected while reading data from INI pair",
-    *PairNotFoundMessage = "INI pair not found while finding pair to read";
+const char *PairTypeMismatchMessage = "Type mismatch detected while reading data from INI pair";
 
 enum Constants
 {
@@ -197,160 +195,156 @@ int INIFindAndRemovePair(INISection *section, char *key)
     return 0;
 }
 
-char *INIGetString(INIPair *pair)
+void *INIGetValue(INIPair *pair, enum INIType type)
 {
     Assert(pair, EINVAL, NULL);
-    AssertMsg(pair->Type == INITypeString, EINVAL, NULL, PairTypeMismatchMessage);
-    return (char *)pair->Value;
+    AssertMsg(pair->Type == type, EINVAL, NULL, PairTypeMismatchMessage);
+    return pair->Value;
+}
+
+void *INIFindValue(INISection *section, char *key, enum INIType type)
+{
+    INIPair *pair = INIFindPair(section, key);
+    return pair ? INIGetValue(pair, type) : NULL;
+}
+
+INIPair *INIAddValue(INI *INI, INISection *section, char *key, enum INIType type, void *value)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIAddPair(INI, section, key), NULL);
+    Try(INISetValue(INI, pair, type, value), NULL);
+
+    return pair;
+}
+
+int INISetValue(INI *INI, INIPair *pair, enum INIType type, void *value)
+{
+    Assert(pair, EINVAL, -1);
+    Assert(value, EINVAL, -1);
+
+    void *storedValue;
+
+    switch(type)
+    {
+        case INITypeString:
+        {
+            // Could optimize to not allocate extra for smaller strings
+            Try(storedValue = INIAllocate(INI, strlen((char *)value) + 1), -1);
+            strcpy(storedValue, value);
+            break;
+        }
+        case INITypeInt:
+        {
+            if(pair->Type != INITypeInt)
+                Try(storedValue = INIAllocate(INI, sizeof(int64_t)), -1);
+            else
+                storedValue = pair->Value;
+
+            *(int64_t *)storedValue = *(int64_t *)value;
+        }
+        case INITypeFloat:
+        {
+            if(pair->Type != INITypeFloat)
+                Try(storedValue = INIAllocate(INI, sizeof(double)), -1);
+            else
+                storedValue = pair->Value;
+
+            *(double *)storedValue = *(double *)value;
+        }
+    }
+
+    pair->Value = storedValue;
+    pair->Type = type;
+
+    return 0;
+}
+
+int INIFindAndSetValue(INI *INI, INISection *section, char *key, enum INIType type, void *value)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIFindPair(section, key), -1);
+    Try(INISetValue(INI, pair, type, value), -1);
+
+    return 0;
+}
+
+// Type safe functions for convenience
+
+char *INIGetString(INIPair *pair)
+{
+    return INIGetValue(pair, INITypeString);
 }
 
 char *INIFindString(INISection *section, char *key)
 {
-    INIPair *pair = INIFindPair(section, key);
-    return pair ? INIGetString(pair) : NULL;
+    return INIFindValue(section, key, INITypeString);
 }
 
 INIPair *INIAddString(INI *INI, INISection *section, char *key, char *string)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIAddPair(INI, section, key), NULL);
-    Try(INISetString(INI, pair, string), NULL);
-
-    return pair;
+    return INIAddValue(INI, section, key, INITypeString, string);
 }
 
 int INISetString(INI *INI, INIPair *pair, char *string)
 {
-    Assert(pair, EINVAL, -1);
-    Assert(string, EINVAL, -1);
-
-    // Could optimize to not allocate extra for smaller strings
-
-    char *storedString;
-    Try(storedString = INIAllocate(INI, strlen(string) + 1), -1);
-
-    strcpy(storedString, string);
-    pair->Value = storedString;
-    pair->Type = INITypeString;
-
-    return 0;
+    return INISetValue(INI, pair, INITypeString, string);
 }
 
 int INIFindAndSetString(INI *INI, INISection *section, char *key, char *string)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIFindPair(section, key), -1);
-    Try(INISetString(INI, pair, string), -1);
-
-    return 0;
+    return INIFindAndSetValue(INI, section, key, INITypeString, string);
 }
 
 int64_t *INIGetInt(INIPair *pair)
 {
-    Assert(pair, EINVAL, NULL);
-    AssertMsg(pair->Type == INITypeInt, EINVAL, NULL, PairTypeMismatchMessage);
-    return (int64_t *)pair->Value;
+    return INIGetValue(pair, INITypeInt);
 }
 
 int64_t *INIFindInt(INISection *section, char *key)
 {
-    INIPair *pair = INIFindPair(section, key);
-    return pair ? INIGetInt(pair) : NULL;
+    return INIFindValue(section, key, INITypeInt);
 }
 
 INIPair *INIAddInt(INI *INI, INISection *section, char *key, int64_t integer)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIAddPair(INI, section, key), NULL);
-    Try(INISetInt(INI, pair, integer), NULL);
-
-    return pair;
+    return INIAddValue(INI, section, key, INITypeInt, &integer);
 }
 
 int INISetInt(INI *INI, INIPair *pair, int64_t integer)
 {
-    Assert(pair, EINVAL, -1);
-
-    int64_t *storedInt;
-    if(pair->Type != INITypeInt)
-    {
-        Try(storedInt = INIAllocate(INI, sizeof(*storedInt)), -1);
-        pair->Value = storedInt;
-        pair->Type = INITypeInt;
-    }
-    else
-        storedInt = pair->Value;
-
-    *storedInt = integer;
-    return 0;
+    return INISetValue(INI, pair, INITypeInt, &integer);
 }
 
 int INIFindAndSetInt(INI* INI, INISection *section, char *key, int64_t integer)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIFindPair(section, key), -1);
-    Try(INISetInt(INI, pair, integer), -1);
-
-    return 0;
+    return INIFindAndSetValue(INI, section, key, INITypeInt, &integer);
 }
 
 double *INIGetFloat(INIPair *pair)
 {
-    Assert(pair, EINVAL, NULL);
-    AssertMsg(pair->Type == INITypeFloat, EINVAL, NULL, PairTypeMismatchMessage);
-    return (double *)pair->Value;
+    return INIGetValue(pair, INITypeFloat);
 }
 
 double *INIFindFloat(INISection *section, char *key)
 {
-    INIPair *pair = INIFindPair(section, key);
-    return pair ? INIGetFloat(pair) : NULL;
+    return INIFindValue(section, key, INITypeFloat);
 }
 
 INIPair *INIAddFloat(INI *INI, INISection *section, char *key, double number)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIAddPair(INI, section, key), NULL);
-    Try(INISetFloat(INI, pair, number), NULL);
-
-    return pair;
+    return INIAddValue(INI, section, key, INITypeFloat, &number);
 }
 
 int INISetFloat(INI *INI, INIPair *pair, double number)
 {
-    Assert(pair, EINVAL, -1);
-
-    int64_t *storedFloat;
-    if(pair->Type != INITypeInt)
-    {
-        Try(storedFloat = INIAllocate(INI, sizeof(*storedFloat)), -1);
-        pair->Value = storedFloat;
-        pair->Type = INITypeInt;
-    }
-    else
-        storedFloat = pair->Value;
-
-    *storedFloat = number;
-    return 0;
+    return INISetValue(INI, pair, INITypeFloat, &number);
 }
 
 int INIFindAndSetFloat(INI* INI, INISection *section, char *key, double number)
 {
-    // Callees have asserts
-
-    INIPair *pair;
-    Try(pair = INIFindPair(section, key), -1);
-    Try(INISetFloat(INI, pair, number), -1);
-
-    return 0;
+    return INIFindAndSetValue(INI, section, key, INITypeFloat, &number);
 }

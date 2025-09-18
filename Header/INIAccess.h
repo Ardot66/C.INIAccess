@@ -69,6 +69,12 @@ INIPair *INIFindPair(INISection *section, char *key);
 int INIFindAndRemovePair(INISection *section, char *key);
 int INIRemovePair(INISection *section, INIPair *pair);
 
+void *INIGetValue(INIPair *pair, enum INIType type);
+void *INIFindValue(INISection *section, char *key, enum INIType type);
+INIPair *INIAddValue(INI *INI, INISection *section, char *key, enum INIType type, void *value);
+int INISetValue(INI *INI, INIPair *pair, enum INIType type, void *value);
+int INIFindAndSetValue(INI *INI, INISection *section, char *key, enum INIType type, void *value);
+
 char *INIGetString(INIPair *pair);
 char *INIFindString(INISection *section, char *key);
 INIPair *INIAddString(INI *INI, INISection *section, char *key, char *string);
