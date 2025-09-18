@@ -3,122 +3,249 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <pthread.h>
 
-static void *UpdatePointer(void *pointer, void *old, void *new)
+enum Constants
 {
-    if(pointer == NULL)
-        return pointer;
+    ArenaBaseSize = 1024,
+    ArenaScaleMultiplier = 2,
+    ArenaScaleDivisor = 0
+};
 
-    ptrdiff_t offset = (char *)pointer - (char *)old;
-    return (char *)new + offset;
-}
+typedef struct INIArena
+{
+    INIArena *PreviousArena;
+    size_t Size;
+    size_t Used;
+} INIArena;
 
 static void *INIAllocate(INI *INI, size_t size)
 {
-    assert(INI->ArenaUsed < INI->ArenaSize);
+    assert(INI);
 
-    if(INI->ArenaSize - INI->ArenaUsed < size)
+    INIArena *arena = INI->Arena;
+
+    if(arena != NULL && arena->Size - arena->Used <= size)
     {
-        size_t newSize = INI->ArenaSize;
-        while (newSize - INI->ArenaUsed < size)
-            newSize *= 2;
-        
-        void *oldPtr = INI->Arena;
-        void *temp = realloc(INI->Arena, newSize);
-        if(temp == NULL)
-            Throw(errno, NULL, "");
-
-        INI->Arena = temp;
-        INI->ArenaSize = newSize;
-
-        INI->FirstSection = UpdatePointer(INI->FirstSection, oldPtr, INI->Arena);
-        INISection *section = INI->FirstSection;
-
-        while(section != NULL)
-        {
-            section->FirstPair = UpdatePointer(section->FirstPair, oldPtr, INI->Arena);
-            INIPair *pair = section->FirstPair;
-
-            while(pair != NULL)
-            {
-                pair->Key = UpdatePointer(pair->Key, oldPtr, INI->Arena);
-                pair->Value = UpdatePointer(pair->Value, oldPtr, INI->Arena);
-                pair->NextPair = UpdatePointer(pair->NextPair, oldPtr, INI->Arena);
-
-                pair = pair->NextPair;
-            }
-
-            section->NextSection = UpdatePointer(section->NextSection, oldPtr, INI->Arena);
-            section = section->NextSection;
-        }
+        arena->Used += size;
+        return (char *)arena + size;
     }
 
-    INI->ArenaUsed += size;
-    return (char *)INI->Arena + INI->ArenaUsed - size;
+    size_t nextSize = arena == NULL ? ArenaBaseSize : arena->Size;
+    while(nextSize < size)
+        nextSize = (nextSize * ArenaScaleMultiplier) / ArenaScaleDivisor;
+
+    INIArena *newArena = malloc(nextSize);
+    if(newArena == NULL)
+        Throw(errno, NULL, "");
+    newArena->Size = nextSize;
+    newArena->Used = sizeof(*newArena) + size;
+    newArena->PreviousArena = arena;
+
+    INI->Arena = newArena;
+
+    return (char *)newArena + size;
 }
 
 void INIStreamRead(INI *INI, INIStream *Stream);
 void INIStreamWrite(INI *INI, INIStream *Stream);
 void INIStreamFree(INIStream *Stream);
 
-int INICreate(INI *INI)
-{
-    INI->Arena = malloc(1024);
-    if(INI->Arena == NULL)
-        Throw(errno, -1, "");
-
-    INI->ArenaSize = 0;
-    INI->ArenaUsed = 0;
-    INI->FirstSection = NULL;
-
-    return 0;
-}
-
 void INIRead(INI *INI, char *file);
 void INIWrite(INI *INI, char *file);
-void INIFree(INI *INI);
 
-INISection *INIFindSection(char *sectionName);
-void INIRemoveSection(INISection *section);
+void INIFree(INI *INI)
+{
+    assert(INI);
+
+    INIArena *arena = INI->Arena;
+
+    while(arena != NULL)
+    {
+        void *temp = arena;
+        arena = arena->PreviousArena;
+        free(temp);
+    }
+}
+
+INISection *INIFindSection(INI *INI, char *sectionName)
+{
+    assert(INI);
+    assert(sectionName);
+
+    for(INISection *section = INI->FirstSection; section != NULL; section = section->NextSection)
+    {
+        if(strcmp(section->Name, sectionName) == 0)
+            return section;
+    }
+    
+    return NULL;
+}
+
+void INIRemoveSection(INI *INI, INISection *section)
+{
+    assert(INI);
+    assert(section);
+
+    for(INISection *iteratingSection = INI->FirstSection; iteratingSection != NULL; iteratingSection = iteratingSection->NextSection)
+    {
+        if(iteratingSection->NextSection == section)    
+        {
+            iteratingSection->NextSection = section->NextSection;
+            return;
+        }
+    }
+}
+
+static void *INIAddLinkedListElement(INI *INI, void **firstElement, size_t elementSize, size_t nextElementOffset)
+{
+    assert(INI);
+    assert(firstElement);
+    assert(nextElementOffset < elementSize);
+
+    void *newElement = INIAllocate(INI, elementSize);
+    *(void **)((char *)newElement + nextElementOffset) = NULL;
+
+    void *element = firstElement;
+    while(element != NULL && *(void **)((char *)element + nextElementOffset) != NULL)
+        element = *(void **)((char *)element + nextElementOffset);
+
+    if(element == NULL)
+        *firstElement = newElement;
+    else
+        *(void **)((char *)element + nextElementOffset) = newElement;
+
+    return newElement;
+}
 
 INISection *INIAddSection(INI *INI, char *sectionName)
 {
-    if(INIFindSection(sectionName) != NULL)
+    assert(INI);
+    assert(sectionName);
+
+    if(INIFindSection(INI, sectionName) != NULL)
         Throw(EINVAL, NULL, "Cannot add a section with a name that is already in use by another section");
 
-    // Need to allocate first otherwise pointers may be invalidated
-    size_t sectionNameLength = strlen(sectionName);
-    void *allocation = INIAllocate(INI, sectionNameLength + 1 + sizeof(INISection));
-
-    char *storedSectionName = allocation;
+    char *storedSectionName = INIAllocate(INI, strlen(sectionName) + 1);
     strcpy(storedSectionName, sectionName);
 
-    INISection *newSection = (char *)allocation + sectionNameLength + 1;
-
-    INISection *section = INI->FirstSection;
-    while(section != NULL && section->NextSection != NULL)
-        section = section->NextSection;
-
-    section->NextSection = newSection;
+    INISection *newSection = INIAddLinkedListElement(INI, (void **)&INI->FirstSection, sizeof(*newSection), offsetof(INISection, NextSection));
     newSection->Name = storedSectionName;
     newSection->FirstPair = NULL;
-    newSection->NextSection = NULL;
 
-    return newSection;
+   return newSection;
 }
 
-INIPair *INIFindPair(INISection *section, char *key);
-void INIFindAndRemovePair(INISection *section, char *key);
-void INIRemovePair(INISection *section, INIPair *pair);
+static INIPair *INIAddPair(INI *INI, INISection *section, char *key)
+{
+    assert(INI);
+    assert(section);
+    assert(key);
 
-char *INIGetString(INIPair *pair);
-char *INIFindString(INISection *section, char *key);
-char *INIAddString(INI *INI, INISection *section, char *key, char *string);    
+    if(INIFindPair(INI, key) != NULL)
+        Throw(EINVAL, NULL, "Cannot add a pair with a key that is already in use by another pair");
+
+    char *storedKeyName = INIAllocate(INI, strlen(key) + 1);
+    strcpy(storedKeyName, key);
+
+    INIPair *newPair = INIAddLinkedListElement(INI, (void **)&section->FirstPair, sizeof(*newPair), offsetof(INIPair, NextPair));
+    newPair->Key = storedKeyName;
+    newPair->Value = NULL;
+
+   return newPair;
+}
+
+INIPair *INIFindPair(INISection *section, char *key)
+{
+    assert(section);
+    assert(key);
+
+    for(INIPair *pair = section->FirstPair; pair != NULL; pair = pair->NextPair)
+    {
+        if(strcmp(pair->Key, key) == 0)
+            return pair;
+    }
+
+    return NULL;
+}
+
+void INIRemovePair(INISection *section, INIPair *pair)
+{
+    assert(section);
+    assert(pair);
+
+    for(INIPair *iterPair = section->FirstPair; iterPair != NULL; iterPair = iterPair->NextPair)
+    {
+        if(iterPair->NextPair == pair)
+        {
+            iterPair->NextPair = pair->NextPair;
+            return;
+        }
+    }
+}
+
+void INIFindAndRemovePair(INISection *section, char *key)
+{
+    assert(section);
+    assert(key);
+
+    INIPair *pair = INIFindPair(section, key);
+    if(!pair)
+        return;
+    INIRemovePair(section, pair);
+}
+
+char *INIGetString(INIPair *pair)
+{
+    assert(pair);
+    if(pair->Type != )
+    return (char *)pair->Value;
+}
+
+char *INIFindString(INISection *section, char *key)
+{
+    assert(section);
+    assert(key);
+
+    INIPair *pair = INIFindPair(section, key);
+    if(pair == NULL)
+        return NULL;
+    return (char *)pair->Value;
+}
+
+void INISetString(INI *INI, INIPair *pair, char *string)
+{
+    assert(INI);
+    assert(pair);
+    assert(string);
+
+    char *storedString = INIAllocate(INI, strlen(string) + 1);
+    strcpy(storedString, string);
+    pair->Value = storedString;
+}
+
+char *INIAddString(INI *INI, INISection *section, char *key, char *string)
+{
+    assert(INI);
+    assert(section);
+    assert(key);
+    assert(string);
+
+    INIPair *pair;
+    Try(pair = INIAddPair(INI, section, key), NULL);
+    INISetString(INI, pair, string);
+}
+
+void INIFindAndSetString(INI *INI, char *key, char *string);
 
 uint64_t *INIGetInt(INIPair *pair);
 uint64_t *INIFindInt(INISection *section, char *key);
 uint64_t *INIAddInt(INI *INI, INISection *section, char *key, uint64_t integer);    
+void INISetInt(INI *INI, INIPair *pair, uint64_t integer);
+void INIFindAndSetInt(INI* INI, char *key, uint64_t integer);
 
 double *INIGetFloat(INIPair *pair);
 double *INIFindFloat(INISection *section, char *key);
 double *INIAddFloat(INI *INI, INISection *section, char *key, double number);    
+void INISetDouble(INI *INI, INIPair *pair, double integer);
+void INIFindAndSetDouble(INI* INI, char *key, double integer);
