@@ -1,28 +1,31 @@
 #include "INIAccess.h"
-#include "Try.h"
+#include "Assert.h"
 #include <stdlib.h>
-#include <assert.h>
+#include <Try.h>
 #include <string.h>
 #include <pthread.h>
+
+const char 
+    *PairTypeMismatchMessage = "Type mismatch detected while reading data from INI pair",
+    *PairNotFoundMessage = "INI pair not found while finding pair to read";
 
 enum Constants
 {
     ArenaBaseSize = 1024,
     ArenaScaleMultiplier = 2,
-    ArenaScaleDivisor = 0
+    ArenaScaleDivisor = 1
 };
 
-typedef struct INIArena
+typedef struct INIArena INIArena; 
+struct INIArena
 {
     INIArena *PreviousArena;
     size_t Size;
     size_t Used;
-} INIArena;
+} ;
 
 static void *INIAllocate(INI *INI, size_t size)
 {
-    assert(INI);
-
     INIArena *arena = INI->Arena;
 
     if(arena != NULL && arena->Size - arena->Used <= size)
@@ -36,8 +39,8 @@ static void *INIAllocate(INI *INI, size_t size)
         nextSize = (nextSize * ArenaScaleMultiplier) / ArenaScaleDivisor;
 
     INIArena *newArena = malloc(nextSize);
-    if(newArena == NULL)
-        Throw(errno, NULL, "");
+    Assert(newArena != NULL, errno, NULL);
+
     newArena->Size = nextSize;
     newArena->Used = sizeof(*newArena) + size;
     newArena->PreviousArena = arena;
@@ -56,7 +59,7 @@ void INIWrite(INI *INI, char *file);
 
 void INIFree(INI *INI)
 {
-    assert(INI);
+    Assert(INI, EINVAL, );
 
     INIArena *arena = INI->Arena;
 
@@ -70,8 +73,8 @@ void INIFree(INI *INI)
 
 INISection *INIFindSection(INI *INI, char *sectionName)
 {
-    assert(INI);
-    assert(sectionName);
+    Assert(INI, EINVAL, NULL);
+    Assert(sectionName, EINVAL, NULL);
 
     for(INISection *section = INI->FirstSection; section != NULL; section = section->NextSection)
     {
@@ -82,26 +85,28 @@ INISection *INIFindSection(INI *INI, char *sectionName)
     return NULL;
 }
 
-void INIRemoveSection(INI *INI, INISection *section)
+int INIRemoveSection(INI *INI, INISection *section)
 {
-    assert(INI);
-    assert(section);
+    Assert(INI, EINVAL, -1);
+    Assert(section, EINVAL, -1);
 
     for(INISection *iteratingSection = INI->FirstSection; iteratingSection != NULL; iteratingSection = iteratingSection->NextSection)
     {
         if(iteratingSection->NextSection == section)    
         {
             iteratingSection->NextSection = section->NextSection;
-            return;
+            return 0;
         }
     }
+
+    return 0;
 }
 
 static void *INIAddLinkedListElement(INI *INI, void **firstElement, size_t elementSize, size_t nextElementOffset)
 {
-    assert(INI);
-    assert(firstElement);
-    assert(nextElementOffset < elementSize);
+    Assert(INI, EINVAL, NULL);
+    Assert(firstElement, EINVAL, NULL);
+    Assert(nextElementOffset < elementSize, EINVAL, NULL);
 
     void *newElement = INIAllocate(INI, elementSize);
     *(void **)((char *)newElement + nextElementOffset) = NULL;
@@ -120,11 +125,9 @@ static void *INIAddLinkedListElement(INI *INI, void **firstElement, size_t eleme
 
 INISection *INIAddSection(INI *INI, char *sectionName)
 {
-    assert(INI);
-    assert(sectionName);
-
-    if(INIFindSection(INI, sectionName) != NULL)
-        Throw(EINVAL, NULL, "Cannot add a section with a name that is already in use by another section");
+    Assert(INI, EINVAL, NULL);
+    Assert(sectionName, EINVAL, NULL);
+    AssertMsg(INIFindSection(INI, sectionName) == NULL, EINVAL, NULL, "Cannot add a section with a name that is already in use by another section");
 
     char *storedSectionName = INIAllocate(INI, strlen(sectionName) + 1);
     strcpy(storedSectionName, sectionName);
@@ -138,12 +141,10 @@ INISection *INIAddSection(INI *INI, char *sectionName)
 
 static INIPair *INIAddPair(INI *INI, INISection *section, char *key)
 {
-    assert(INI);
-    assert(section);
-    assert(key);
-
-    if(INIFindPair(INI, key) != NULL)
-        Throw(EINVAL, NULL, "Cannot add a pair with a key that is already in use by another pair");
+    Assert(INI, EINVAL, NULL);
+    Assert(section, EINVAL, NULL);
+    Assert(key, EINVAL, NULL);
+    AssertMsg(INIFindPair(section, key) == NULL, EINVAL, NULL, "Cannot add a pair with a key that is already in use by another pair");
 
     char *storedKeyName = INIAllocate(INI, strlen(key) + 1);
     strcpy(storedKeyName, key);
@@ -151,14 +152,15 @@ static INIPair *INIAddPair(INI *INI, INISection *section, char *key)
     INIPair *newPair = INIAddLinkedListElement(INI, (void **)&section->FirstPair, sizeof(*newPair), offsetof(INIPair, NextPair));
     newPair->Key = storedKeyName;
     newPair->Value = NULL;
+    newPair->Type = INITypeInvalid;
 
    return newPair;
 }
 
 INIPair *INIFindPair(INISection *section, char *key)
 {
-    assert(section);
-    assert(key);
+    Assert(section, EINVAL, NULL);
+    Assert(key, EINVAL, NULL);
 
     for(INIPair *pair = section->FirstPair; pair != NULL; pair = pair->NextPair)
     {
@@ -169,83 +171,186 @@ INIPair *INIFindPair(INISection *section, char *key)
     return NULL;
 }
 
-void INIRemovePair(INISection *section, INIPair *pair)
+int INIRemovePair(INISection *section, INIPair *pair)
 {
-    assert(section);
-    assert(pair);
+    Assert(section, EINVAL, -1);
+    Assert(pair, EINVAL, -1);
 
     for(INIPair *iterPair = section->FirstPair; iterPair != NULL; iterPair = iterPair->NextPair)
     {
         if(iterPair->NextPair == pair)
         {
             iterPair->NextPair = pair->NextPair;
-            return;
+            return 0;
         }
     }
+
+    return 0;
 }
 
-void INIFindAndRemovePair(INISection *section, char *key)
+int INIFindAndRemovePair(INISection *section, char *key)
 {
-    assert(section);
-    assert(key);
+    INIPair *pair;
+    Try(pair = INIFindPair(section, key), -1);
+    Try(INIRemovePair(section, pair), -1);
 
-    INIPair *pair = INIFindPair(section, key);
-    if(!pair)
-        return;
-    INIRemovePair(section, pair);
+    return 0;
 }
 
 char *INIGetString(INIPair *pair)
 {
-    assert(pair);
-    if(pair->Type != )
+    Assert(pair, EINVAL, NULL);
+    AssertMsg(pair->Type == INITypeString, EINVAL, NULL, PairTypeMismatchMessage);
     return (char *)pair->Value;
 }
 
 char *INIFindString(INISection *section, char *key)
 {
-    assert(section);
-    assert(key);
-
     INIPair *pair = INIFindPair(section, key);
-    if(pair == NULL)
-        return NULL;
-    return (char *)pair->Value;
+    return pair ? INIGetString(pair) : NULL;
 }
 
-void INISetString(INI *INI, INIPair *pair, char *string)
+INIPair *INIAddString(INI *INI, INISection *section, char *key, char *string)
 {
-    assert(INI);
-    assert(pair);
-    assert(string);
-
-    char *storedString = INIAllocate(INI, strlen(string) + 1);
-    strcpy(storedString, string);
-    pair->Value = storedString;
-}
-
-char *INIAddString(INI *INI, INISection *section, char *key, char *string)
-{
-    assert(INI);
-    assert(section);
-    assert(key);
-    assert(string);
+    // Callees have asserts
 
     INIPair *pair;
     Try(pair = INIAddPair(INI, section, key), NULL);
-    INISetString(INI, pair, string);
+    Try(INISetString(INI, pair, string), NULL);
+
+    return pair;
 }
 
-void INIFindAndSetString(INI *INI, char *key, char *string);
+int INISetString(INI *INI, INIPair *pair, char *string)
+{
+    Assert(pair, EINVAL, -1);
+    Assert(string, EINVAL, -1);
 
-uint64_t *INIGetInt(INIPair *pair);
-uint64_t *INIFindInt(INISection *section, char *key);
-uint64_t *INIAddInt(INI *INI, INISection *section, char *key, uint64_t integer);    
-void INISetInt(INI *INI, INIPair *pair, uint64_t integer);
-void INIFindAndSetInt(INI* INI, char *key, uint64_t integer);
+    // Could optimize to not allocate extra for smaller strings
 
-double *INIGetFloat(INIPair *pair);
-double *INIFindFloat(INISection *section, char *key);
-double *INIAddFloat(INI *INI, INISection *section, char *key, double number);    
-void INISetDouble(INI *INI, INIPair *pair, double integer);
-void INIFindAndSetDouble(INI* INI, char *key, double integer);
+    char *storedString;
+    Try(storedString = INIAllocate(INI, strlen(string) + 1), -1);
+
+    strcpy(storedString, string);
+    pair->Value = storedString;
+    pair->Type = INITypeString;
+
+    return 0;
+}
+
+int INIFindAndSetString(INI *INI, INISection *section, char *key, char *string)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIFindPair(section, key), -1);
+    Try(INISetString(INI, pair, string), -1);
+
+    return 0;
+}
+
+int64_t *INIGetInt(INIPair *pair)
+{
+    Assert(pair, EINVAL, NULL);
+    AssertMsg(pair->Type == INITypeInt, EINVAL, NULL, PairTypeMismatchMessage);
+    return (int64_t *)pair->Value;
+}
+
+int64_t *INIFindInt(INISection *section, char *key)
+{
+    INIPair *pair = INIFindPair(section, key);
+    return pair ? INIGetInt(pair) : NULL;
+}
+
+INIPair *INIAddInt(INI *INI, INISection *section, char *key, int64_t integer)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIAddPair(INI, section, key), NULL);
+    Try(INISetInt(INI, pair, integer), NULL);
+
+    return pair;
+}
+
+int INISetInt(INI *INI, INIPair *pair, int64_t integer)
+{
+    Assert(pair, EINVAL, -1);
+
+    int64_t *storedInt;
+    if(pair->Type != INITypeInt)
+    {
+        Try(storedInt = INIAllocate(INI, sizeof(*storedInt)), -1);
+        pair->Value = storedInt;
+        pair->Type = INITypeInt;
+    }
+    else
+        storedInt = pair->Value;
+
+    *storedInt = integer;
+    return 0;
+}
+
+int INIFindAndSetInt(INI* INI, INISection *section, char *key, int64_t integer)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIFindPair(section, key), -1);
+    Try(INISetInt(INI, pair, integer), -1);
+
+    return 0;
+}
+
+double *INIGetFloat(INIPair *pair)
+{
+    Assert(pair, EINVAL, NULL);
+    AssertMsg(pair->Type == INITypeFloat, EINVAL, NULL, PairTypeMismatchMessage);
+    return (double *)pair->Value;
+}
+
+double *INIFindFloat(INISection *section, char *key)
+{
+    INIPair *pair = INIFindPair(section, key);
+    return pair ? INIGetFloat(pair) : NULL;
+}
+
+INIPair *INIAddFloat(INI *INI, INISection *section, char *key, double number)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIAddPair(INI, section, key), NULL);
+    Try(INISetFloat(INI, pair, number), NULL);
+
+    return pair;
+}
+
+int INISetFloat(INI *INI, INIPair *pair, double number)
+{
+    Assert(pair, EINVAL, -1);
+
+    int64_t *storedFloat;
+    if(pair->Type != INITypeInt)
+    {
+        Try(storedFloat = INIAllocate(INI, sizeof(*storedFloat)), -1);
+        pair->Value = storedFloat;
+        pair->Type = INITypeInt;
+    }
+    else
+        storedFloat = pair->Value;
+
+    *storedFloat = number;
+    return 0;
+}
+
+int INIFindAndSetFloat(INI* INI, INISection *section, char *key, double number)
+{
+    // Callees have asserts
+
+    INIPair *pair;
+    Try(pair = INIFindPair(section, key), -1);
+    Try(INISetFloat(INI, pair, number), -1);
+
+    return 0;
+}

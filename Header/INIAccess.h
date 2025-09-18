@@ -7,6 +7,7 @@
 
 enum INIType
 {
+    INITypeInvalid,
     INITypeString,
     INITypeInt,
     INITypeFloat
@@ -61,29 +62,29 @@ void INIWrite(INI *INI, char *file);
 void INIFree(INI *INI);
 
 INISection *INIFindSection(INI *INI, char *sectionName);
-void INIRemoveSection(INISection *section);
+int INIRemoveSection(INI *INI, INISection *section);
 INISection *INIAddSection(INI *INI, char *sectionName);
 
 INIPair *INIFindPair(INISection *section, char *key);
-void INIFindAndRemovePair(INISection *section, char *key);
-void INIRemovePair(INISection *section, INIPair *pair);
+int INIFindAndRemovePair(INISection *section, char *key);
+int INIRemovePair(INISection *section, INIPair *pair);
 
 char *INIGetString(INIPair *pair);
 char *INIFindString(INISection *section, char *key);
-char *INIAddString(INI *INI, INISection *section, char *key, char *string);
-void INISetString(INI *INI, INIPair *pair, char *string);
-void INIFindAndSetString(INI *INI, char *key, char *string);
+INIPair *INIAddString(INI *INI, INISection *section, char *key, char *string);
+int INISetString(INI *INI, INIPair *pair, char *string);
+int INIFindAndSetString(INI *INI, INISection *section, char *key, char *string);
 
-uint64_t *INIGetInt(INIPair *pair);
-uint64_t *INIFindInt(INISection *section, char *key);
-uint64_t *INIAddInt(INI *INI, INISection *section, char *key, uint64_t integer);    
-void INISetInt(INI *INI, INIPair *pair, uint64_t integer);
-void INIFindAndSetInt(INI* INI, char *key, uint64_t integer);
+int64_t *INIGetInt(INIPair *pair);
+int64_t *INIFindInt(INISection *section, char *key);
+INIPair *INIAddInt(INI *INI, INISection *section, char *key, int64_t integer);    
+int INISetInt(INI *INI, INIPair *pair, int64_t integer);
+int INIFindAndSetInt(INI* INI, INISection *section, char *key, int64_t integer);
 
 double *INIGetFloat(INIPair *pair);
 double *INIFindFloat(INISection *section, char *key);
-double *INIAddFloat(INI *INI, INISection *section, char *key, double number);    
-void INISetDouble(INI *INI, INIPair *pair, double integer);
-void INIFindAndSetDouble(INI* INI, char *key, double integer);
+INIPair *INIAddFloat(INI *INI, INISection *section, char *key, double number);    
+int INISetFloat(INI *INI, INIPair *pair, double integer);
+int INIFindAndSetFloat(INI* INI, INISection *section, char *key, double integer);
 
 #endif
