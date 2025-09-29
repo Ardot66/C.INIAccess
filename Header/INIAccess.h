@@ -9,19 +9,18 @@ enum INIType
 {
     INITypeInvalid,
     INITypeString,
-    INITypeInt,
     INITypeFloat
 };
 
-typedef struct INIStream
+enum INIStreamStatus
 {
-    // These must be set
-    char *IOStream;
-    size_t IOStreamCount;
-
-    //  These are used internally 
-    ListGeneric LineBuffer;
-} INIStream;
+    INIStreamStatusFatalFailure = -1,
+    INIStreamStatusSuccess = 0,
+    INIStreamStatusContinue,
+    INIStreamStatusSectionHeaderParseFailed,
+    INIStreamStatusPairParseFailed,
+    INIStreamStatusInvalidType
+};
 
 typedef struct INIPair INIPair;
 struct INIPair
@@ -47,18 +46,41 @@ typedef struct INI
     INISection *FirstSection;
 } INI;
 
+typedef struct INIStream
+{
+    // These must be set
+    char *IOStream;
+    size_t IOStreamCount;
+
+    //  These are used internally 
+    ListGeneric LineBuffer;
+    INISection *CurrentSection;
+    INIPair *CurrentPair;
+    size_t LineBufferRead;
+} INIStream;
+
+const INIStream INIStreamDefault = 
+{
+    .IOStream = NULL,
+    .IOStreamCount = 0,
+    .LineBuffer = ListDefault,
+    .CurrentSection = NULL,
+    .CurrentPair = NULL,
+    .LineBufferRead = 0
+};
+
 const INI INIDefault = 
 {
     .Arena = NULL,
     .FirstSection = NULL
 };
 
-void INIStreamRead(INI *INI, INIStream *Stream);
-void INIStreamWrite(INI *INI, INIStream *Stream);
+int INIStreamRead(INI *INI, INIStream *Stream);
+int INIStreamWrite(INI *INI, INIStream *Stream);
 void INIStreamFree(INIStream *Stream);
 
-void INIRead(INI *INI, char *file);
-void INIWrite(INI *INI, char *file);
+int INIRead(INI *INI, char *file);
+int INIWrite(INI *INI, char *file);
 void INIFree(INI *INI);
 
 INISection *INIFindSection(INI *INI, char *sectionName);
